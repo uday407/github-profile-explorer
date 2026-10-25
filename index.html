@@ -1,0 +1,193 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub Profile Explorer</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:#0d1117;color:#e6edf3;
+font:16px Arial,sans-serif;padding:20px}
+main{max-width:900px;margin:auto}
+h1{color:#58a6ff}
+input,button,select{padding:12px;border-radius:8px;
+border:1px solid #30363d;background:#161b22;color:white}
+input{width:65%;max-width:500px}
+button{cursor:pointer;background:#238636}
+a{color:#58a6ff;text-decoration:none}
+.card{border:1px solid #30363d;border-radius:12px;
+padding:16px;margin:14px 0;background:#161b22}
+.profile{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+.avatar{width:100px;border-radius:50%}
+.stats{display:flex;gap:12px;flex-wrap:wrap}
+.muted{color:#8b949e}
+.repo h3{margin-bottom:6px}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin:14px 0}
+@media(max-width:500px){body{padding:12px}input{width:100%}}
+</style>
+</head>
+<body>
+<main>
+<h1>GitHub Profile Explorer</h1>
+<p class="muted">Explore public GitHub profiles and repositories.</p>
+
+<form id="searchForm" class="row">
+<input id="username" placeholder="Enter GitHub username"
+aria-label="GitHub username" required>
+<button type="submit">Search</button>
+</form>
+
+<div id="message" role="status" aria-live="polite"></div>
+<section id="profile"></section>
+
+<section id="repositories" hidden>
+<h2>Repositories</h2>
+<input id="filter" placeholder="Search repositories..."
+aria-label="Filter repositories">
+<select id="sort" aria-label="Sort repositories">
+<option value="stars">Most stars</option>
+<option value="updated">Recently updated</option>
+<option value="name">Name A–Z</option>
+</select>
+<div id="repoList"></div>
+</section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+let repos = [];
+
+async function api(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    if (response.status === 404) throw Error("User not found.");
+    if (response.status === 403 || response.status === 429)
+      throw Error("GitHub API rate limit reached. Try again later.");
+    throw Error("GitHub API request failed.");
+  }
+  return response.json();
+}
+
+$("searchForm").addEventListener("submit", async event => {
+  event.preventDefault();
+  const user = $("username").value.trim();
+  if (!/^[a-zA-Z0-9-]+$/.test(user)) {
+    $("message").textContent = "Enter a valid GitHub username.";
+    return;
+  }
+
+  $("message").textContent = "Loading profile...";
+  $("profile").innerHTML = "";
+  $("repositories").hidden = true;
+
+  try {
+    const [p, r] = await Promise.all([
+      api("https://api.github.com/users/" + encodeURIComponent(user)),
+      api("https://api.github.com/users/" + encodeURIComponent(user)
+        + "/repos?per_page=100&sort=updated")
+    ]);
+
+    repos = r;
+    const totalStars = repos.reduce((sum, x) => sum + x.stargazers_count, 0);
+    const totalForks = repos.reduce((sum, x) => sum + x.forks_count, 0);
+    const totalIssues = repos.reduce((sum, x) =>
+      sum + x.open_issues_count, 0);
+
+    $("profile").innerHTML = `
+      <div class="card profile">
+        <img class="avatar" src="${p.avatar_url}" alt="GitHub avatar">
+        <div>
+          <h2>${escapeHTML(p.name || p.login)}</h2>
+          <p><a href="${p.html_url}" target="_blank"
+            rel="noopener noreferrer">@${escapeHTML(p.login)}</a></p>
+          <p>${escapeHTML(p.bio || "No bio available")}</p>
+          <p class="muted">${escapeHTML(p.company || "")}
+            ${p.location ? " · " + escapeHTML(p.location) : ""}</p>
+          <p>${p.blog ? `<a href="${safeURL(p.blog)}"
+            target="_blank" rel="noopener noreferrer">Website</a>` : ""}
+            ${p.twitter_username ? " · @" +
+            escapeHTML(p.twitter_username) : ""}</p>
+        </div>
+      </div>
+      <div class="card stats">
+        <span>Followers: <b>${p.followers}</b></span>
+        <span>Following: <b>${p.following}</b></span>
+        <span>Public repos: <b>${p.public_repos}</b></span>
+        <span>Stars: <b>${totalStars}</b></span>
+        <span>Forks: <b>${totalForks}</b></span>
+        <span>Open issues: <b>${totalIssues}</b></span>
+      </div>
+      <p class="muted">Joined: ${new Date(p.created_at)
+        .toLocaleDateString()}</p>`;
+
+    $("repositories").hidden = false;
+    $("message").textContent =
+      "Profile loaded. Showing up to 100 repositories.";
+    renderRepos();
+    const params = new URLSearchParams(location.search);
+    params.set("user", p.login);
+    history.replaceState(null, "", "?" + params.toString());
+  } catch (error) {
+    $("message").textContent = error.message;
+  }
+});
+
+function escapeHTML(value) {
+  return String(value).replace(/[&<>"']/g, c => ({
+    "&":"&amp;", "<":"&lt;", ">":"&gt;",
+    '"':"&quot;", "'":"&#39;"
+  })[c]);
+}
+
+function safeURL(value) {
+  let url = String(value);
+  if (!/^https?:\/\//i.test(url)) url = "https://" + url;
+  try {
+    const parsed = new URL(url);
+    return ["http:", "https:"].includes(parsed.protocol)
+      ? parsed.href : "#";
+  } catch { return "#"; }
+}
+
+function renderRepos() {
+  const term = $("filter").value.toLowerCase();
+  const sort = $("sort").value;
+
+  const list = repos.filter(r =>
+    (r.name + " " + (r.description || "") + " " +
+      (r.language || "")).toLowerCase().includes(term)
+  );
+
+  list.sort((a,b) => sort === "stars"
+    ? b.stargazers_count - a.stargazers_count
+    : sort === "updated"
+    ? new Date(b.updated_at) - new Date(a.updated_at)
+    : a.name.localeCompare(b.name));
+
+  $("repoList").innerHTML = list.map(r => `
+    <article class="card repo">
+      <h3><a href="${r.html_url}" target="_blank"
+        rel="noopener noreferrer">${escapeHTML(r.name)}</a></h3>
+      <p>${escapeHTML(r.description || "No description")}</p>
+      <p class="muted">${escapeHTML(r.language || "No language")} ·
+        ★ ${r.stargazers_count} · Forks ${r.forks_count}</p>
+      <p class="muted">Last push: ${
+        new Date(r.pushed_at || r.updated_at).toLocaleDateString()}</p>
+    </article>`).join("");
+
+  if (!list.length) $("repoList").textContent = "No repositories found.";
+}
+
+$("filter").addEventListener("input", renderRepos);
+$("sort").addEventListener("change", renderRepos);
+
+const initialUser = new URLSearchParams(location.search).get("user");
+if (initialUser) {
+  $("username").value = initialUser;
+  $("searchForm").requestSubmit();
+}
+</script>
+</body>
+</html>
